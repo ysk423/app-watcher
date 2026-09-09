@@ -2,7 +2,7 @@
 
 現状の実装に基づく機能仕様。内部設計は [design.md](./design.md) を参照。
 
-最終更新: 2026-09-09（Cloudflare へデプロイ済み）
+最終更新: 2026-09-09（本番稼働中 / GitHub 自動デプロイ連携済み）
 
 ---
 
@@ -17,6 +17,9 @@ Google Play 上のアプリを毎日 1 回自動で追跡し、変化を記録�
 | 認証 | Basic 認証 |
 | 監視上限 | 100 アプリ |
 | AI | Google Gemini（既定: `gemini-3.5-flash-lite`） |
+| ソース | GitHub `ysk423/app-watcher` |
+| デプロイ | `main` への push で自動（Cloudflare Workers Builds） |
+| 定期実行 | 10 分おきの Cron Trigger |
 
 ---
 
@@ -276,7 +279,50 @@ wrangler d1 export app-watcher --remote --output=backup.sql
 
 ---
 
-## 9. 制限事項
+## 9. 更新とデプロイ
+
+### 9.1 コードを変更したとき
+
+`main` に push すると Cloudflare Workers Builds が自動でデプロイする。
+
+```
+git push  →  GitHub  →  Workers Builds  →  本番反映
+```
+
+ローカルから `npm run deploy` で直接デプロイすることもできるが、
+GitHub のコードと本番が食い違うため、緊急時以外は push 経由にする。
+
+### 9.2 設定を変更したいとき
+
+変更したい項目によって手段が異なる。
+
+| 変更したいもの | 手段 | 反映 |
+|---|---|---|
+| Gemini モデル・呼び出し上限・収集開始時刻・バッチ件数・保持日数 | **設定画面**から変更 | 即時 |
+| 監視上限（`MAX_APPS`）・1 回のレビュー取得件数・ストレージ上限表示 | `wrangler.jsonc` の `vars` を編集して push | デプロイ後 |
+| 認証情報・Gemini API キー | `wrangler secret put <名前>` | 即時（デプロイ不要） |
+
+**設定画面での変更が最優先される。** `wrangler.jsonc` の値を変えても、
+同じ項目が設定画面から保存されていると反映されない。その場合は設定画面側で変更するか、
+D1 の `settings` テーブルから該当行を削除する。
+
+> **シークレットは必ず `wrangler secret put` で登録すること。**
+> Cloudflare ダッシュボードから「通常の環境変数（Text）」として追加すると、
+> 次回のデプロイで `wrangler.jsonc` の `vars` に上書きされて消える。
+
+### 9.3 スキーマを変更したとき
+
+`migrations/` に新しい SQL を追加し、リモート DB へ適用する。
+
+```bash
+npm run migrate:remote
+```
+
+マイグレーションの適用は自動デプロイに含まれないため、手動で実行する必要がある。
+
+---
+
+## 10. 制限事項
 
 | 項目 | 内容 |
 |---|---|
@@ -289,7 +335,7 @@ wrangler d1 export app-watcher --remote --output=backup.sql
 
 ---
 
-## 10. 動作確認済みの項目
+## 11. 動作確認済みの項目
 
 ローカルおよび本番環境で、実データ・実 API による E2E 確認を実施済み。
 
@@ -309,7 +355,19 @@ wrangler d1 export app-watcher --remote --output=backup.sql
 | Gemini 日次分析 / 全体分析 / Q&A | 実キーで成功 |
 | 呼び出し上限到達時 | API を叩かず `skipped` として記録、収集は継続 |
 
+**本番環境（Cloudflare）で確認したもの**
+
+| 対象 | 結果 |
+|---|---|
+| Basic 認証 | 未認証で 401、認証で 200 |
+| 認証情報の未設定時 | 全ページが 500 を返し、内容が露出しない |
+| Google Play 実データ収集 | YouTube の登録＋即時取得に成功 |
+| Gemini 日次分析 | 実キーで成功 |
+| Cron Trigger | `Every 10 minutes` で登録済み |
+| ストレージ表示 | `152 KB / 500 MB` と正しい上限で表示 |
+
 **未確認**
 
 - ブラウザでの見た目・ダークモード・レスポンシブ表示
 - 「前回取得との差分」の実表示（2 日目のスナップショットが必要）
+- `main` への push による自動デプロイ（Git 連携の設定は完了済み）

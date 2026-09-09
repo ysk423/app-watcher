@@ -54,6 +54,24 @@ node -e "fetch('http://127.0.0.1:8787/__scheduled?cron=*/10+*+*+*+*').then(r=>r.
 
 ## デプロイ
 
+**運用中の環境は GitHub と連携済みで、`main` への push で自動デプロイされます。**
+Cloudflare Workers Builds がリポジトリを監視し、`npx wrangler deploy` を実行します。
+
+```
+git push  →  GitHub  →  Cloudflare Workers Builds  →  本番反映
+```
+
+手元から直接デプロイすることもできます（緊急時や、コミットせずに試したいとき）。
+
+```bash
+npm run deploy
+```
+
+ビルドの状況は Cloudflare ダッシュボードの Workers → app-watcher → 設定 → ビルド、
+実行時のログは `npm run tail` で追えます。
+
+### 初回セットアップ（新しい環境に立ち上げる場合）
+
 ```bash
 # 1. D1 を作成し、出力された database_id を wrangler.jsonc の
 #    d1_databases[0].database_id に貼る（初期値は PLACEHOLDER_RUN_WRANGLER_D1_CREATE）
@@ -67,15 +85,20 @@ npx wrangler secret put BASIC_AUTH_USER
 npx wrangler secret put BASIC_AUTH_PASS
 npx wrangler secret put GEMINI_API_KEY   # AI 分析を使う場合のみ
 
-# 4. デプロイ
+# 4. 初回デプロイ
 npm run deploy
 ```
+
+> **シークレットは必ず `wrangler secret put` で登録してください。**
+> Cloudflare ダッシュボードから「通常の環境変数（Text）」として追加すると、
+> `wrangler deploy` 実行時に `wrangler.jsonc` の `vars` で上書きされて消えます。
+
+Git 連携を設定する場合は、ダッシュボードの Workers → app-watcher → 設定 → ビルド →
+「Git リポジトリ」の接続から行います。ビルドコマンドは空、デプロイコマンドは `npx wrangler deploy` です。
 
 独自サブドメインを使う場合は Cloudflare ダッシュボードの
 Workers → 該当 Worker → Settings → Domains & Routes から Custom Domain を割り当てます。
 `wrangler.jsonc` に routes の記述例をコメントで置いてあります。
-
-ログは `npm run tail` で追えます。
 
 ---
 
