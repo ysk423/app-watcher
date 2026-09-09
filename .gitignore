@@ -2,6 +2,9 @@ node_modules/
 .wrangler/
 dist/
 
+# 開発ツール(Serena)のプロジェクト設定。アプリの動作には不要
+.serena/
+
 # ローカル開発用の秘密情報。絶対にコミットしない(仕様 21.3 / 25)
 .dev.vars
 .dev.vars.*
