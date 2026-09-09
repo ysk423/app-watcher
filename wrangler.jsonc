@@ -1,0 +1,55 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "app-watcher",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+
+  // D1 バインディング。database_id は `wrangler d1 create app-watcher` の出力を貼る
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "app-watcher",
+      "database_id": "PLACEHOLDER_RUN_WRANGLER_D1_CREATE"
+    }
+  ],
+
+  // 実装ポイント: 無料プランは Worker あたりの Cron Trigger 本数が限られるため、
+  // 「時間帯ごとに何本も登録する」のではなく 10 分おきの単一 tick に集約している。
+  // tick 側で「本日分のキューが未作成かつ JST が COLLECT_START_JST を過ぎていれば投入」
+  // 「キューが残っていれば数件だけ処理」と状態遷移を判断するので、
+  // 1 日 1 回の収集(仕様 5.1)を保ちつつ、失敗分は当日中に自動リトライされる。
+  "triggers": {
+    "crons": ["*/10 * * * *"]
+  },
+
+  "vars": {
+    // Gemini モデル名(D1 の settings テーブルで上書き可能。仕様 10.1)
+    "GEMINI_MODEL": "gemini-3.5-flash-lite",
+    // アクティブ監視上限(仕様 4.3)
+    "MAX_APPS": "100",
+    // 日次収集の開始時刻(JST)。この時刻以降の最初の tick で当日キューを作る
+    "COLLECT_START_JST": "03:00",
+    // 1 tick あたりの処理件数。CPU 時間実測に応じて調整する(仕様 5.1 の要検証事項)
+    "COLLECT_BATCH_SIZE": "2",
+    "ANALYZE_BATCH_SIZE": "2",
+    // 1 アプリあたり 1 回の収集で取得するレビュー件数の上限
+    "REVIEWS_PER_FETCH": "50",
+    // レビュー保持期間(仕様 7.2)
+    "REVIEW_RETENTION_DAYS": "90",
+    // 実行履歴(ログ相当)保持期間(仕様 20)
+    "LOG_RETENTION_DAYS": "30",
+    // Gemini の 1 日あたり呼び出し上限。無料枠を超えないための自衛(仕様 10.2)
+    "GEMINI_DAILY_LIMIT": "180",
+    // D1 無料枠のストレージ上限の目安。使用率表示に使う(仕様 18)
+    "D1_STORAGE_LIMIT_BYTES": "5368709120"
+  }
+
+  // 秘密情報は wrangler secret put で登録する(仕様 21.3 / 25)
+  //   wrangler secret put GEMINI_API_KEY
+  //   wrangler secret put BASIC_AUTH_USER
+  //   wrangler secret put BASIC_AUTH_PASS
+  //
+  // 独自サブドメインは Cloudflare ダッシュボードまたは routes 設定で割り当てる(仕様 22)
+  // 例:
+  // "routes": [{ "pattern": "watcher.example.com", "custom_domain": true }]
+}

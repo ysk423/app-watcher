@@ -1,0 +1,23 @@
+{
+  "name": "app-watcher",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Google Play App Watcher on Cloudflare Workers + D1",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "migrate:local": "wrangler d1 migrations apply app-watcher --local",
+    "migrate:remote": "wrangler d1 migrations apply app-watcher --remote",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "hono": "^4.13.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260908.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.130.0"
+  }
+}

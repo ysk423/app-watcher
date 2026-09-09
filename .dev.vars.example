@@ -1,0 +1,7 @@
+# ローカル開発用のシークレット。これをコピーして .dev.vars を作る
+#   cp .dev.vars.example .dev.vars
+# 本番は wrangler secret put で登録する(このファイルはデプロイされない)
+
+BASIC_AUTH_USER=admin
+BASIC_AUTH_PASS=change-me
+GEMINI_API_KEY=
