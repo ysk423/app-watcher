@@ -9,7 +9,7 @@
     {
       "binding": "DB",
       "database_name": "app-watcher",
-      "database_id": "PLACEHOLDER_RUN_WRANGLER_D1_CREATE"
+      "database_id": "27019ed7-1700-48de-b6b3-1792080c42ec"
     }
   ],
 
@@ -40,8 +40,9 @@
     "LOG_RETENTION_DAYS": "30",
     // Gemini の 1 日あたり呼び出し上限。無料枠を超えないための自衛(仕様 10.2)
     "GEMINI_DAILY_LIMIT": "180",
-    // D1 無料枠のストレージ上限の目安。使用率表示に使う(仕様 18)
-    "D1_STORAGE_LIMIT_BYTES": "5368709120"
+    // D1 無料枠のストレージ上限。使用率表示に使う(仕様 18)
+    // 無料プランは「1 データベースあたり 500MB」。アカウント合計の 5GB とは別物なので注意
+    "D1_STORAGE_LIMIT_BYTES": "524288000"
   }
 
   // 秘密情報は wrangler secret put で登録する(仕様 21.3 / 25)

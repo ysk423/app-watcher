@@ -41,7 +41,8 @@ const DEFAULTS = {
   reviewRetentionDays: 90,
   logRetentionDays: 30,
   geminiDailyLimit: 180,
-  d1StorageLimitBytes: 5 * 1024 * 1024 * 1024,
+  // 無料プランは 1 データベースあたり 500MB(アカウント合計の 5GB とは別)
+  d1StorageLimitBytes: 500 * 1024 * 1024,
 };
 
 /** Web UI から変更可能な設定キー */
