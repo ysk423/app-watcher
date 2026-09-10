@@ -1,4 +1,4 @@
-import type { PlayReview } from '../types';
+import type { CountryConfig, PlayReview } from '../types';
 import { unixSecondsToIso } from '../util/time';
 import { pick, pickNumber, pickString, sliceBalanced } from './parse-utils';
 
@@ -11,8 +11,15 @@ import { pick, pickNumber, pickString, sliceBalanced } from './parse-utils';
  * ここが壊れても詳細取得側は成功扱いのままにできるよう呼び出し側で分離している(仕様 23)。
  */
 
-const REVIEWS_URL =
-  'https://play.google.com/_/PlayStoreUi/data/batchexecute?rpcids=UsvDTd&source-path=%2Fstore%2Fapps%2Fdetails&hl=ja&gl=JP&authuser&soc-app=121&soc-platform=1&soc-device=1&_reqid=1';
+// hl / gl で返るレビューの言語・国が変わるため、呼び出し時に組み立てる
+function reviewsUrl(locale: CountryConfig): string {
+  return (
+    'https://play.google.com/_/PlayStoreUi/data/batchexecute?rpcids=UsvDTd' +
+    '&source-path=%2Fstore%2Fapps%2Fdetails' +
+    `&hl=${encodeURIComponent(locale.hl)}&gl=${encodeURIComponent(locale.gl)}` +
+    '&authuser&soc-app=121&soc-platform=1&soc-device=1&_reqid=1'
+  );
+}
 
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -29,7 +36,11 @@ export class ReviewFetchError extends Error {
   }
 }
 
-export async function fetchReviews(packageName: string, count: number): Promise<PlayReview[]> {
+export async function fetchReviews(
+  packageName: string,
+  count: number,
+  locale: CountryConfig
+): Promise<PlayReview[]> {
   const inner = JSON.stringify([
     null,
     null,
@@ -40,12 +51,12 @@ export async function fetchReviews(packageName: string, count: number): Promise<
 
   let response: Response;
   try {
-    response = await fetch(REVIEWS_URL, {
+    response = await fetch(reviewsUrl(locale), {
       method: 'POST',
       headers: {
         'User-Agent': USER_AGENT,
         'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-        'Accept-Language': 'ja,en;q=0.8',
+        'Accept-Language': `${locale.hl},en;q=0.8`,
       },
       body: `f.req=${encodeURIComponent(payload)}`,
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),

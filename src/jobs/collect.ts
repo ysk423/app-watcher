@@ -1,12 +1,12 @@
 import { AppNotFoundError, fetchAppDetail } from '../collector/play-detail';
 import { fetchReviews } from '../collector/play-reviews';
-import { STALE_LOCK_MINUTES, type AppConfig } from '../config';
+import { COUNTRIES, STALE_LOCK_MINUTES, type AppConfig } from '../config';
 import { markAppError, updateAppFromDetail } from '../db/apps';
 import { logJob } from '../db/jobs';
 import { saveReviews } from '../db/reviews';
 import { upsertSnapshot, upsertUnavailableSnapshot } from '../db/snapshots';
 import { acquireLock, releaseLock, setStatus } from '../db/system';
-import type { Env, PlayReview } from '../types';
+import type { CountryConfig, Env, PlayReview } from '../types';
 import { isoNow, jstDate } from '../util/time';
 
 export interface JobResult {
@@ -40,69 +40,112 @@ export async function collectApp(
   }
 
   try {
-    const detail = await fetchAppDetail(packageName);
+    // 実装ポイント: 1 タスクの中で全対象国をまとめて処理する。
+    // 国ごとにキューを分けるとロック取得と実行履歴が国の数だけ増え、
+    // サブリクエスト上限(無料プランは 50/実行)に対して不利になるため(仕様 5.5)。
+    const parts: string[] = [];
+    let successCount = 0;
+    let notFoundCount = 0;
+    let lastError: Error | null = null;
 
-    // レビュー取得は詳細取得と別経路なので、失敗しても収集自体は成功として扱う
-    let reviews: PlayReview[] = [];
-    let reviewMessage = '';
-    try {
-      reviews = await fetchReviews(packageName, config.reviewsPerFetch);
-      reviewMessage = `レビュー ${reviews.length} 件を取得`;
-    } catch (e) {
-      reviewMessage = `レビュー取得のみ失敗: ${(e as Error).message}`;
-    }
+    for (const locale of COUNTRIES) {
+      try {
+        const result = await collectForCountry(env, config, packageName, locale, runDate);
+        parts.push(`${locale.label}: ${result}`);
+        successCount++;
+      } catch (e) {
+        const error = e as Error;
+        lastError = error;
+        const notFound = error instanceof AppNotFoundError;
+        if (notFound) notFoundCount++;
 
-    // Play がバージョンを公開していない場合はレビューの申告バージョンで補完する
-    if (!detail.version) {
-      const inferred = inferVersionFromReviews(reviews);
-      if (inferred) {
-        detail.version = inferred;
-        detail.versionSource = 'reviews';
+        // Google Play から消えていても自動削除はせず、状態だけ記録する(仕様 13.3)
+        await markAppError(env.DB, packageName, locale.country, error.message, notFound);
+        if (notFound) {
+          await upsertUnavailableSnapshot(env.DB, packageName, locale.country, runDate);
+        }
+        parts.push(`${locale.label}: 失敗(${error.message})`);
       }
     }
 
-    await updateAppFromDetail(env.DB, detail, runDate);
-    await upsertSnapshot(env.DB, detail, runDate);
+    const message = parts.join(' / ');
 
-    if (reviews.length > 0) {
-      const saved = await saveReviews(env.DB, packageName, reviews, config.reviewRetentionDays);
-      reviewMessage = `レビュー ${saved} 件を追加(取得 ${reviews.length} 件)`;
+    // 1 か国でも取れれば収集は成功扱いにする(片方の国だけ未配信のアプリがあるため)
+    if (successCount > 0) {
+      await logJob(env.DB, {
+        kind: 'collect',
+        trigger,
+        packageName,
+        status: successCount === COUNTRIES.length ? 'success' : 'skipped',
+        message,
+        startedAt,
+      });
+      await setStatus(env.DB, 'last_collect_at', isoNow());
+      return { ok: true, retryable: true, message };
     }
-
-    const score = detail.score != null ? detail.score.toFixed(2) : '-';
-    const message = `バージョン ${detail.version ?? '-'} / 評価 ${score} / ${reviewMessage}`;
-    await logJob(env.DB, {
-      kind: 'collect',
-      trigger,
-      packageName,
-      status: 'success',
-      message,
-      startedAt,
-    });
-    await setStatus(env.DB, 'last_collect_at', isoNow());
-
-    return { ok: true, retryable: true, message };
-  } catch (e) {
-    const error = e as Error;
-    const notFound = error instanceof AppNotFoundError;
-
-    // Google Play から消えていても自動削除はせず、状態だけ記録する(仕様 13.3)
-    await markAppError(env.DB, packageName, error.message, notFound);
-    if (notFound) await upsertUnavailableSnapshot(env.DB, packageName, runDate);
 
     await logJob(env.DB, {
       kind: 'collect',
       trigger,
       packageName,
       status: 'error',
-      message: error.message,
+      message,
       startedAt,
     });
 
-    return { ok: false, retryable: !notFound, message: error.message };
+    // 全対象国で 404 なら再試行しても結果は変わらない
+    const allNotFound = notFoundCount === COUNTRIES.length;
+    return { ok: false, retryable: !allNotFound, message: lastError?.message ?? message };
   } finally {
     await releaseLock(env.DB, lockKey);
   }
+}
+
+/** 1 か国分の詳細とレビューを取得して保存する。失敗時は例外を投げる */
+async function collectForCountry(
+  env: Env,
+  config: AppConfig,
+  packageName: string,
+  locale: CountryConfig,
+  runDate: string
+): Promise<string> {
+  const detail = await fetchAppDetail(packageName, locale);
+
+  // レビュー取得は詳細取得と別経路なので、失敗しても収集自体は成功として扱う
+  let reviews: PlayReview[] = [];
+  let reviewMessage = '';
+  try {
+    reviews = await fetchReviews(packageName, config.reviewsPerFetch, locale);
+    reviewMessage = `レビュー ${reviews.length} 件を取得`;
+  } catch (e) {
+    reviewMessage = `レビュー取得のみ失敗: ${(e as Error).message}`;
+  }
+
+  // Play がバージョンを公開していない場合はレビューの申告バージョンで補完する
+  if (!detail.version) {
+    const inferred = inferVersionFromReviews(reviews);
+    if (inferred) {
+      detail.version = inferred;
+      detail.versionSource = 'reviews';
+    }
+  }
+
+  await updateAppFromDetail(env.DB, detail, locale.country, runDate);
+  await upsertSnapshot(env.DB, detail, locale.country, runDate);
+
+  if (reviews.length > 0) {
+    const saved = await saveReviews(
+      env.DB,
+      packageName,
+      locale.country,
+      reviews,
+      config.reviewRetentionDays
+    );
+    reviewMessage = `レビュー ${saved} 件を追加(取得 ${reviews.length} 件)`;
+  }
+
+  const score = detail.score != null ? detail.score.toFixed(2) : '-';
+  return `v${detail.version ?? '-'} / 評価 ${score} / ${reviewMessage}`;
 }
 
 /**

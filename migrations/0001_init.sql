@@ -1,11 +1,17 @@
 -- Google Play App Watcher 初期スキーマ
+--
 -- 実装ポイント:
---  * 日次スナップショットは「差分表示に必要なスカラー値」だけを持たせて行サイズを抑える(仕様 6.2 / 18)
+--  * データの粒度は「アプリ × 国 × 日」。
+--    Google Play は評価を国別に集計しており、実測では YouTube が
+--    日本 3.24 / 米国 3.84、LINE が 日本 3.40 / 米国 3.08 と差が出る。
+--    レビュー・コンテンツレーティング・通貨・説明文も国によって変わる。
+--    一方 評価件数(ratings)とインストール数は全世界共通の値が返る。
+--  * 日次スナップショットは差分表示に必要なスカラー値だけを持たせて行サイズを抑える(仕様 6.2 / 18)
 --  * 説明文・スクリーンショット等の重い項目は monitored_apps に最新値のみ保持し、
 --    スナップショット側にはハッシュだけを入れて「変化したかどうか」を判定できるようにする
 --  * 画像バイナリは保存せず URL のみ(仕様 8)
 
--- 監視対象アプリ。最新の重い項目(説明文・スクショURL等)もここに載せる
+-- 監視対象アプリ。国によらない共通情報だけを持つ
 CREATE TABLE monitored_apps (
   package_name      TEXT PRIMARY KEY,
   title             TEXT,
@@ -21,18 +27,9 @@ CREATE TABLE monitored_apps (
   developer_website TEXT,
   privacy_policy    TEXT,
   released          TEXT,
-  -- 実装ポイント: 一覧画面のために毎回スナップショット全体を走査すると D1 の読み取り行数を大量に消費するため、
-  -- 表示に使う最新値だけをここに非正規化して持つ(履歴の正は app_snapshots 側)。仕様 24 / 18
-  latest_collected_date  TEXT,
-  latest_version         TEXT,
-  latest_score           REAL,
-  latest_ratings         INTEGER,
-  latest_reviews_count   INTEGER,
-  latest_installs        TEXT,
-  latest_play_updated_at TEXT,
   -- 'active' = 監視中 / 'paused' = 監視停止(仕様 13.1)
   status            TEXT NOT NULL DEFAULT 'active',
-  -- Google Play から取得できなくなった状態。自動削除はしない(仕様 13.3)
+  -- 全対象国で取得できなくなった状態。自動削除はしない(仕様 13.3)
   unavailable       INTEGER NOT NULL DEFAULT 0,
   added_at          TEXT NOT NULL,
   last_success_at   TEXT,
@@ -43,20 +40,46 @@ CREATE TABLE monitored_apps (
 
 CREATE INDEX idx_apps_status ON monitored_apps(status);
 
+-- 国ごとの最新値。
+-- 実装ポイント: 一覧画面のために毎回スナップショット全体を走査すると D1 の読み取り行数を
+-- 大量に消費するため、表示に使う最新値だけをここに非正規化して持つ(履歴の正は app_snapshots 側)。
+-- monitored_apps に latest_score_us のような列を足す形は、国を増やすたびに
+-- スキーマ変更が必要になるため採らなかった。仕様 24 / 18
+CREATE TABLE app_countries (
+  package_name           TEXT NOT NULL,
+  country                TEXT NOT NULL,          -- 'JP' | 'US'
+  latest_collected_date  TEXT,
+  latest_version         TEXT,
+  latest_score           REAL,
+  latest_ratings         INTEGER,
+  latest_reviews_count   INTEGER,
+  latest_installs        TEXT,
+  latest_play_updated_at TEXT,
+  -- 国別に取得可否が変わることがあるため、状態も国ごとに持つ
+  unavailable            INTEGER NOT NULL DEFAULT 0,
+  last_success_at        TEXT,
+  last_error_at          TEXT,
+  last_error             TEXT,
+  PRIMARY KEY (package_name, country)
+);
+
+CREATE INDEX idx_countries_pkg ON app_countries(package_name);
+
 -- 日次スナップショット(仕様 6)
 CREATE TABLE app_snapshots (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   package_name      TEXT NOT NULL,
+  country           TEXT NOT NULL,
   collected_date    TEXT NOT NULL,             -- JST の YYYY-MM-DD
   collected_at      TEXT NOT NULL,             -- ISO8601 (UTC)
   title             TEXT,
   developer         TEXT,
   icon_url          TEXT,
   category          TEXT,
-  score             REAL,
-  ratings           INTEGER,
-  reviews_count     INTEGER,
-  installs          TEXT,
+  score             REAL,                      -- 国別に集計された評価
+  ratings           INTEGER,                   -- 全世界共通
+  reviews_count     INTEGER,                   -- 国別
+  installs          TEXT,                      -- 全世界共通
   min_installs      INTEGER,
   version           TEXT,
   -- 実装ポイント: Google Play は詳細ページからアプリのバージョン表記を廃止しており、
@@ -81,16 +104,17 @@ CREATE TABLE app_snapshots (
   screenshots_hash  TEXT,
   -- 取得できなかった日を記録するためのフラグ
   unavailable       INTEGER NOT NULL DEFAULT 0,
-  -- 同一日の再実行を冪等にする(仕様 9.2 / 17.2)
-  UNIQUE(package_name, collected_date)
+  -- 同一日・同一国の再実行を冪等にする(仕様 9.2 / 17.2)
+  UNIQUE(package_name, country, collected_date)
 );
 
-CREATE INDEX idx_snapshots_pkg_date ON app_snapshots(package_name, collected_date DESC);
+CREATE INDEX idx_snapshots_pkg_date ON app_snapshots(package_name, country, collected_date DESC);
 
 -- レビュー。直近 90 日のみ保持する(仕様 7)
 CREATE TABLE reviews (
   review_id     TEXT PRIMARY KEY,              -- Google Play 側のレビュー ID で一意性を確保(仕様 7.3)
   package_name  TEXT NOT NULL,
+  country       TEXT NOT NULL,                 -- どの国のレビュー一覧で取得したか
   author        TEXT,
   score         INTEGER,
   text          TEXT,
@@ -102,10 +126,12 @@ CREATE TABLE reviews (
   fetched_at    TEXT NOT NULL
 );
 
-CREATE INDEX idx_reviews_pkg_date ON reviews(package_name, review_date DESC);
+CREATE INDEX idx_reviews_pkg_country_date ON reviews(package_name, country, review_date DESC);
 CREATE INDEX idx_reviews_date ON reviews(review_date);
 
--- AI 分析結果(仕様 10)
+-- AI 分析結果(仕様 10)。
+-- 実装ポイント: 分析は全対象国のデータをまとめて 1 回で行うため国別に分けない。
+-- 国ごとに分析すると Gemini の呼び出し回数が国の数だけ増えて無料枠に触れる(仕様 10.2)。
 CREATE TABLE ai_analyses (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   run_date      TEXT NOT NULL,                 -- JST の YYYY-MM-DD
@@ -123,7 +149,10 @@ CREATE TABLE ai_analyses (
 CREATE INDEX idx_analyses_pkg ON ai_analyses(package_name, created_at DESC);
 CREATE INDEX idx_analyses_run ON ai_analyses(run_date, scope);
 
--- 日次処理を複数回の Cron 発火に分割するためのキュー(仕様 5.1 / 9.1)
+-- 日次処理を複数回の Cron 発火に分割するためのキュー(仕様 5.1 / 9.1)。
+-- 実装ポイント: タスクは国別に分けない。1 アプリ分のタスクの中で全対象国をまとめて取得する。
+-- 国別に分けるとロック取得と実行履歴が国の数だけ増え、
+-- サブリクエスト上限(無料プランは 50/実行)に対して不利になる。
 CREATE TABLE collection_queue (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   run_date     TEXT NOT NULL,                  -- JST の YYYY-MM-DD

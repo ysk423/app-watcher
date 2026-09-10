@@ -1,4 +1,4 @@
-import type { AppSnapshot, DiffEntry, PlayAppDetail } from '../types';
+import type { AppSnapshot, Country, DiffEntry, PlayAppDetail } from '../types';
 import { contentHash } from '../util/hash';
 import { isoNow, jstDate } from '../util/time';
 
@@ -10,22 +10,24 @@ import { isoNow, jstDate } from '../util/time';
 export async function upsertSnapshot(
   db: D1Database,
   detail: PlayAppDetail,
+  country: Country,
   runDate: string = jstDate()
 ): Promise<void> {
   await db
     .prepare(
       `INSERT OR REPLACE INTO app_snapshots (
-         package_name, collected_date, collected_at,
+         package_name, country, collected_date, collected_at,
          title, developer, icon_url, category,
          score, ratings, reviews_count, installs, min_installs,
          version, version_source, play_updated_at, recent_changes,
          price_text, price_micros, currency, is_free, offers_iap, iap_range,
          android_version, content_rating, ad_supported,
          description_hash, screenshots_hash, unavailable
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
     )
     .bind(
       detail.packageName,
+      country,
       runDate,
       isoNow(),
       detail.title,
@@ -60,36 +62,45 @@ export async function upsertSnapshot(
 export async function upsertUnavailableSnapshot(
   db: D1Database,
   packageName: string,
+  country: Country,
   runDate: string = jstDate()
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT OR REPLACE INTO app_snapshots (package_name, collected_date, collected_at, unavailable)
-       VALUES (?, ?, ?, 1)`
+      `INSERT OR REPLACE INTO app_snapshots (package_name, country, collected_date, collected_at, unavailable)
+       VALUES (?, ?, ?, ?, 1)`
     )
-    .bind(packageName, runDate, isoNow())
+    .bind(packageName, country, runDate, isoNow())
     .run();
 }
 
-export async function getLatestSnapshot(db: D1Database, packageName: string): Promise<AppSnapshot | null> {
+export async function getLatestSnapshot(
+  db: D1Database,
+  packageName: string,
+  country: Country
+): Promise<AppSnapshot | null> {
   return db
     .prepare(
       `SELECT * FROM app_snapshots
-       WHERE package_name = ? AND unavailable = 0
+       WHERE package_name = ? AND country = ? AND unavailable = 0
        ORDER BY collected_date DESC LIMIT 1`
     )
-    .bind(packageName)
+    .bind(packageName, country)
     .first<AppSnapshot>();
 }
 
 export async function getSnapshots(
   db: D1Database,
   packageName: string,
+  country: Country,
   limit: number
 ): Promise<AppSnapshot[]> {
   const { results } = await db
-    .prepare('SELECT * FROM app_snapshots WHERE package_name = ? ORDER BY collected_date DESC LIMIT ?')
-    .bind(packageName, limit)
+    .prepare(
+      `SELECT * FROM app_snapshots WHERE package_name = ? AND country = ?
+       ORDER BY collected_date DESC LIMIT ?`
+    )
+    .bind(packageName, country, limit)
     .all<AppSnapshot>();
   return results ?? [];
 }
@@ -97,15 +108,16 @@ export async function getSnapshots(
 /** 差分表示用に、有効な(取得成功した)直近 2 件を返す */
 export async function getLastTwoSnapshots(
   db: D1Database,
-  packageName: string
+  packageName: string,
+  country: Country
 ): Promise<{ current: AppSnapshot | null; previous: AppSnapshot | null }> {
   const { results } = await db
     .prepare(
       `SELECT * FROM app_snapshots
-       WHERE package_name = ? AND unavailable = 0
+       WHERE package_name = ? AND country = ? AND unavailable = 0
        ORDER BY collected_date DESC LIMIT 2`
     )
-    .bind(packageName)
+    .bind(packageName, country)
     .all<AppSnapshot>();
   const rows = results ?? [];
   return { current: rows[0] ?? null, previous: rows[1] ?? null };
@@ -115,15 +127,16 @@ export async function getLastTwoSnapshots(
 export async function getWhatsNewHistory(
   db: D1Database,
   packageName: string,
+  country: Country,
   limit: number
 ): Promise<{ collected_date: string; version: string | null; recent_changes: string | null }[]> {
   const { results } = await db
     .prepare(
       `SELECT collected_date, version, recent_changes FROM app_snapshots
-       WHERE package_name = ? AND unavailable = 0 AND recent_changes IS NOT NULL
+       WHERE package_name = ? AND country = ? AND unavailable = 0 AND recent_changes IS NOT NULL
        ORDER BY collected_date DESC LIMIT ?`
     )
-    .bind(packageName, limit * 3)
+    .bind(packageName, country, limit * 3)
     .all<{ collected_date: string; version: string | null; recent_changes: string | null }>();
 
   // 同じ内容が続く日は畳んで「変わった日」だけ残す
@@ -186,28 +199,44 @@ export function computeDiff(current: AppSnapshot | null, previous: AppSnapshot |
 export async function getRecentVersionChanges(
   db: D1Database,
   limit: number
-): Promise<{ package_name: string; title: string | null; collected_date: string; version: string | null }[]> {
+): Promise<
+  {
+    package_name: string;
+    country: Country;
+    title: string | null;
+    collected_date: string;
+    version: string | null;
+  }[]
+> {
+  // 国ごとに独立した系列として「前回と版数が変わった日」を拾う
   const { results } = await db
     .prepare(
-      `SELECT s.package_name, a.title, s.collected_date, s.version
+      `SELECT s.package_name, s.country, a.title, s.collected_date, s.version
        FROM app_snapshots s
        JOIN monitored_apps a ON a.package_name = s.package_name
        WHERE s.unavailable = 0 AND s.version IS NOT NULL
          AND s.version <> COALESCE((
            SELECT p.version FROM app_snapshots p
-           WHERE p.package_name = s.package_name AND p.unavailable = 0
+           WHERE p.package_name = s.package_name AND p.country = s.country AND p.unavailable = 0
              AND p.collected_date < s.collected_date
            ORDER BY p.collected_date DESC LIMIT 1
          ), s.version)
        ORDER BY s.collected_date DESC LIMIT ?`
     )
     .bind(limit)
-    .all<{ package_name: string; title: string | null; collected_date: string; version: string | null }>();
+    .all<{
+      package_name: string;
+      country: Country;
+      title: string | null;
+      collected_date: string;
+      version: string | null;
+    }>();
   return results ?? [];
 }
 
 export interface PeriodEndpoint {
   package_name: string;
+  country: Country;
   collected_date: string;
   score: number | null;
   ratings: number | null;
@@ -223,14 +252,15 @@ export interface PeriodEndpoint {
  * ウィンドウ関数で両端の 2 行だけに絞る(仕様 10.4 / 24)。
  */
 export async function getPeriodEndpoints(db: D1Database, sinceDate: string): Promise<PeriodEndpoint[]> {
+  // 国ごとに期間の最初と最後を取る(評価は国別なので混ぜて比較できない)
   const { results } = await db
     .prepare(
-      `SELECT package_name, collected_date, score, ratings, reviews_count, version, installs,
+      `SELECT package_name, country, collected_date, score, ratings, reviews_count, version, installs,
               CASE WHEN rn_desc = 1 THEN 1 ELSE 0 END AS is_latest
        FROM (
-         SELECT package_name, collected_date, score, ratings, reviews_count, version, installs,
-                ROW_NUMBER() OVER (PARTITION BY package_name ORDER BY collected_date DESC) AS rn_desc,
-                ROW_NUMBER() OVER (PARTITION BY package_name ORDER BY collected_date ASC) AS rn_asc
+         SELECT package_name, country, collected_date, score, ratings, reviews_count, version, installs,
+                ROW_NUMBER() OVER (PARTITION BY package_name, country ORDER BY collected_date DESC) AS rn_desc,
+                ROW_NUMBER() OVER (PARTITION BY package_name, country ORDER BY collected_date ASC) AS rn_asc
          FROM app_snapshots
          WHERE unavailable = 0 AND collected_date >= ?
        )

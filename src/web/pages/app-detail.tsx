@@ -1,10 +1,24 @@
 import type { FC } from 'hono/jsx';
-import type { AiAnalysis, AppSnapshot, DiffEntry, JobLog, MonitoredApp, ReviewRow } from '../../types';
+import { COUNTRIES, countryLabel } from '../../config';
+import type {
+  AiAnalysis,
+  AppCountryRow,
+  AppSnapshot,
+  Country,
+  DiffEntry,
+  JobLog,
+  MonitoredApp,
+  ReviewRow,
+} from '../../types';
 import { formatJst } from '../../util/time';
 import { StatusBadge } from '../layout';
 
 export interface AppDetailData {
   app: MonitoredApp;
+  /** いま表示している国 */
+  country: Country;
+  /** 国別の最新値(国切り替えタブの表示に使う) */
+  countries: Map<Country, AppCountryRow>;
   latest: AppSnapshot | null;
   diffs: DiffEntry[];
   previousDate: string | null;
@@ -19,8 +33,9 @@ export interface AppDetailData {
 
 /** アプリ詳細(仕様 12.2 / 27.3) */
 export const AppDetailPage: FC<{ data: AppDetailData }> = ({ data }) => {
-  const { app, latest } = data;
+  const { app, latest, country, countries } = data;
   const pkg = encodeURIComponent(app.package_name);
+  const currentRow = countries.get(country);
   const screenshots: string[] = app.screenshot_urls ? safeParseArray(app.screenshot_urls) : [];
 
   return (
@@ -72,7 +87,38 @@ export const AppDetailPage: FC<{ data: AppDetailData }> = ({ data }) => {
         </div>
       </div>
 
-      <h2>前回取得との差分</h2>
+      {/* 国の切り替え。評価・レビュー・説明文は国ごとに別の値なので画面も国単位で見せる(仕様 5.5) */}
+      <div class="panel country-tabs">
+        <div class="tabs">
+          {COUNTRIES.map((c) => {
+            const row = countries.get(c.country);
+            const isCurrent = c.country === country;
+            return (
+              <a
+                class={isCurrent ? 'tab current' : 'tab'}
+                href={`/apps/${pkg}?country=${c.country}`}
+                aria-current={isCurrent ? 'page' : undefined}
+              >
+                <span class="tab-label">{c.label}</span>
+                <span class="tab-score">
+                  {row?.latest_score != null ? row.latest_score.toFixed(2) : '-'}
+                </span>
+                {row?.unavailable ? <span class="tab-note">取得不可</span> : null}
+              </a>
+            );
+          })}
+        </div>
+        <p class="muted small">
+          評価とレビューは国ごとに集計された値です。評価件数とインストール数は全世界共通です。
+        </p>
+        {currentRow?.last_error ? (
+          <div class="notice error small">
+            {countryLabel(country)}の最終エラー: {currentRow.last_error}
+          </div>
+        ) : null}
+      </div>
+
+      <h2>前回取得との差分（{countryLabel(country)}）</h2>
       <div class="panel">
         {data.diffs.length === 0 ? (
           <p class="muted">
@@ -101,7 +147,7 @@ export const AppDetailPage: FC<{ data: AppDetailData }> = ({ data }) => {
         )}
       </div>
 
-      <h2>現在の情報</h2>
+      <h2>現在の情報（{countryLabel(country)}）</h2>
       <div class="panel">
         {latest == null ? (
           <p class="muted">まだ取得されていません。「今すぐ取得」を実行してください。</p>
@@ -152,7 +198,7 @@ export const AppDetailPage: FC<{ data: AppDetailData }> = ({ data }) => {
         ) : null}
       </div>
 
-      <h2>スナップショット履歴</h2>
+      <h2>スナップショット履歴（{countryLabel(country)}）</h2>
       <div class="panel table-wrap">
         {data.snapshots.length === 0 ? (
           <p class="muted">履歴はまだありません。</p>
@@ -184,7 +230,7 @@ export const AppDetailPage: FC<{ data: AppDetailData }> = ({ data }) => {
         )}
       </div>
 
-      <h2>What's New の履歴</h2>
+      <h2>What's New の履歴（{countryLabel(country)}）</h2>
       <div class="panel">
         {data.whatsNew.length === 0 ? (
           <p class="muted">記録がありません。</p>
@@ -223,7 +269,7 @@ export const AppDetailPage: FC<{ data: AppDetailData }> = ({ data }) => {
         )}
       </div>
 
-      <h2>レビュー</h2>
+      <h2>レビュー（{countryLabel(country)}）</h2>
       <div class="panel">
         <p class="muted small">
           保存件数 {data.reviewTotal.toLocaleString('ja-JP')} 件(直近 {data.reviewRetentionDays} 日分のみ保持)

@@ -76,6 +76,49 @@ export interface PlayReview {
 
 export type AppStatus = 'active' | 'paused';
 
+/**
+ * 収集対象の国。
+ * 実装ポイント: Google Play の評価(score)・レビュー・コンテンツレーティング・通貨は
+ * 国ごとに異なる値が返る(YouTube 実測で 日本 3.24 / 米国 3.84)。
+ * 一方 ratings と installs は全世界共通の値になる。
+ */
+export type Country = 'JP' | 'US';
+
+/** 国コード → Google Play のリクエストパラメータ */
+export interface CountryConfig {
+  country: Country;
+  /** 表示言語 */
+  hl: string;
+  /** 国 */
+  gl: string;
+  /** 画面表示用のラベル */
+  label: string;
+}
+
+/** アプリ 1 件と、その全対象国の最新値をまとめたもの(一覧・詳細画面用) */
+export interface AppWithCountries {
+  app: MonitoredApp;
+  /** 国コード → 最新値。まだ収集していない国は欠ける */
+  countries: Map<Country, AppCountryRow>;
+}
+
+/** 国ごとの最新値(一覧表示用の非正規化行) */
+export interface AppCountryRow {
+  package_name: string;
+  country: Country;
+  latest_collected_date: string | null;
+  latest_version: string | null;
+  latest_score: number | null;
+  latest_ratings: number | null;
+  latest_reviews_count: number | null;
+  latest_installs: string | null;
+  latest_play_updated_at: string | null;
+  unavailable: number;
+  last_success_at: string | null;
+  last_error_at: string | null;
+  last_error: string | null;
+}
+
 export interface MonitoredApp {
   package_name: string;
   title: string | null;
@@ -91,13 +134,6 @@ export interface MonitoredApp {
   developer_website: string | null;
   privacy_policy: string | null;
   released: string | null;
-  latest_collected_date: string | null;
-  latest_version: string | null;
-  latest_score: number | null;
-  latest_ratings: number | null;
-  latest_reviews_count: number | null;
-  latest_installs: string | null;
-  latest_play_updated_at: string | null;
   status: AppStatus;
   unavailable: number;
   added_at: string;
@@ -110,6 +146,7 @@ export interface MonitoredApp {
 export interface AppSnapshot {
   id: number;
   package_name: string;
+  country: Country;
   collected_date: string;
   collected_at: string;
   title: string | null;
@@ -142,6 +179,7 @@ export interface AppSnapshot {
 export interface ReviewRow {
   review_id: string;
   package_name: string;
+  country: Country;
   author: string | null;
   score: number | null;
   text: string | null;

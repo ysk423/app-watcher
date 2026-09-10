@@ -1,4 +1,4 @@
-import type { PlayAppDetail } from '../types';
+import type { CountryConfig, PlayAppDetail } from '../types';
 import { unixSecondsToIso } from '../util/time';
 import {
   extractLdJson,
@@ -75,16 +75,27 @@ const PATHS = {
   ],
 } as const;
 
-/** Google Play のアプリ詳細ページを取得して解析する */
-export async function fetchAppDetail(packageName: string): Promise<PlayAppDetail> {
-  const url = `https://play.google.com/store/apps/details?id=${encodeURIComponent(packageName)}&hl=ja&gl=JP`;
+/**
+ * Google Play のアプリ詳細ページを取得して解析する。
+ *
+ * 実装ポイント: hl(表示言語)と gl(国)で内容が変わる。評価・レビュー件数・
+ * コンテンツレーティング・通貨・説明文はいずれも国別の値になるため、
+ * 呼び出し側は対象国ごとにこの関数を呼ぶ(仕様 5.5)。
+ */
+export async function fetchAppDetail(
+  packageName: string,
+  locale: CountryConfig
+): Promise<PlayAppDetail> {
+  const url =
+    `https://play.google.com/store/apps/details?id=${encodeURIComponent(packageName)}` +
+    `&hl=${encodeURIComponent(locale.hl)}&gl=${encodeURIComponent(locale.gl)}`;
 
   let response: Response;
   try {
     response = await fetch(url, {
       headers: {
         'User-Agent': USER_AGENT,
-        'Accept-Language': 'ja,en;q=0.8',
+        'Accept-Language': `${locale.hl},en;q=0.8`,
         Accept: 'text/html,application/xhtml+xml',
       },
       // 1 アプリの通信失敗で全体を止めないためのタイムアウト(仕様 23.3)

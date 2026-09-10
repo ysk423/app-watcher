@@ -1,4 +1,6 @@
 import type { FC } from 'hono/jsx';
+import { countryLabel } from '../../config';
+import type { Country } from '../../types';
 import { Stat } from '../layout';
 import { formatJst } from '../../util/time';
 
@@ -16,7 +18,13 @@ export interface DashboardData {
   todayQueue: { pending: number; running: number; done: number; failed: number; total: number };
   geminiCalls: number;
   geminiLimit: number;
-  recentChanges: { package_name: string; title: string | null; collected_date: string; version: string | null }[];
+  recentChanges: {
+    package_name: string;
+    country: Country;
+    title: string | null;
+    collected_date: string;
+    version: string | null;
+  }[];
 }
 
 export const DashboardPage: FC<{ data: DashboardData }> = ({ data }) => {
@@ -91,6 +99,7 @@ export const DashboardPage: FC<{ data: DashboardData }> = ({ data }) => {
                 <tr>
                   <th>日付</th>
                   <th>アプリ</th>
+                  <th>国</th>
                   <th>バージョン</th>
                 </tr>
               </thead>
@@ -99,8 +108,11 @@ export const DashboardPage: FC<{ data: DashboardData }> = ({ data }) => {
                   <tr>
                     <td class="small">{row.collected_date}</td>
                     <td>
-                      <a href={`/apps/${encodeURIComponent(row.package_name)}`}>{row.title ?? row.package_name}</a>
+                      <a href={`/apps/${encodeURIComponent(row.package_name)}?country=${row.country}`}>
+                        {row.title ?? row.package_name}
+                      </a>
                     </td>
+                    <td class="small">{countryLabel(row.country)}</td>
                     <td>{row.version ?? '-'}</td>
                   </tr>
                 ))}

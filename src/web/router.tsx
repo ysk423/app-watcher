@@ -2,13 +2,15 @@ import { Hono } from 'hono';
 import { basicAuth } from 'hono/basic-auth';
 import { GeminiQuotaError, generateText } from '../ai/gemini';
 import { buildQaPrompt, SYSTEM_INSTRUCTION } from '../ai/prompts';
-import { loadConfig, SETTING_KEYS } from '../config';
+import { COUNTRIES, loadConfig, PRIMARY_COUNTRY, SETTING_KEYS } from '../config';
 import {
   countByStatus,
   deleteAppCompletely,
   getApp,
+  getAppCountries,
   insertApp,
   listApps,
+  listAppsWithCountries,
   setAppStatus,
 } from '../db/apps';
 import { countFailedAnalysesSince, listAnalysesForApp, listGlobalAnalyses } from '../db/analyses';
@@ -25,7 +27,7 @@ import {
 import { getDatabaseSizeBytes, getGeminiCallCount, getStatus, setSetting } from '../db/system';
 import { analyzeApp } from '../jobs/analyze';
 import { collectApp } from '../jobs/collect';
-import type { Env } from '../types';
+import type { Country, Env } from '../types';
 import { isoDaysAgo, isoNow, jstDate, nextRunAtJst } from '../util/time';
 import { Layout } from './layout';
 import { AppDetailPage } from './pages/app-detail';
@@ -100,7 +102,10 @@ export function createRouter() {
   // ---- アプリ一覧(仕様 27.2) ----
   app.get('/apps', async (c) => {
     const config = await loadConfig(c.env);
-    const [apps, counts] = await Promise.all([listApps(c.env.DB), countByStatus(c.env.DB)]);
+    const [apps, counts] = await Promise.all([
+      listAppsWithCountries(c.env.DB),
+      countByStatus(c.env.DB),
+    ]);
     return c.html(
       <Layout title="アプリ一覧" message={c.req.query('msg')} error={c.req.query('error')}>
         <AppListPage apps={apps} activeCount={counts.active} maxApps={config.maxApps} />
@@ -157,15 +162,20 @@ export function createRouter() {
     const appRow = await getApp(c.env.DB, packageName);
     if (!appRow) return c.notFound();
 
-    const [lastTwo, snapshots, whatsNew, reviews, reviewTotal, analyses, errorJobs] = await Promise.all([
-      getLastTwoSnapshots(c.env.DB, packageName),
-      getSnapshots(c.env.DB, packageName, 30),
-      getWhatsNewHistory(c.env.DB, packageName, 10),
-      listReviews(c.env.DB, packageName, 30),
-      countReviews(c.env.DB, packageName),
-      listAnalysesForApp(c.env.DB, packageName, 5),
-      listErrorJobsForApp(c.env.DB, packageName, 10),
-    ]);
+    // 表示対象の国。未指定・不正値のときは代表国にフォールバックする
+    const country = asCountry(c.req.query('country'));
+
+    const [countries, lastTwo, snapshots, whatsNew, reviews, reviewTotal, analyses, errorJobs] =
+      await Promise.all([
+        getAppCountries(c.env.DB, packageName),
+        getLastTwoSnapshots(c.env.DB, packageName, country),
+        getSnapshots(c.env.DB, packageName, country, 30),
+        getWhatsNewHistory(c.env.DB, packageName, country, 10),
+        listReviews(c.env.DB, packageName, country, 30),
+        countReviews(c.env.DB, packageName, country),
+        listAnalysesForApp(c.env.DB, packageName, 5),
+        listErrorJobsForApp(c.env.DB, packageName, 10),
+      ]);
 
     return c.html(
       <Layout
@@ -176,6 +186,8 @@ export function createRouter() {
         <AppDetailPage
           data={{
             app: appRow,
+            country,
+            countries,
             latest: lastTwo.current,
             diffs: computeDiff(lastTwo.current, lastTwo.previous),
             previousDate: lastTwo.previous?.collected_date ?? null,
@@ -373,6 +385,13 @@ function asTrimmed(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed === '' ? undefined : trimmed;
+}
+
+/** クエリ文字列の国コードを検証する。未指定・未対応の値は代表国に倒す */
+function asCountry(value: unknown): Country {
+  const trimmed = asTrimmed(value);
+  const found = COUNTRIES.find((c) => c.country === trimmed);
+  return found ? found.country : PRIMARY_COUNTRY;
 }
 
 function asPositiveInt(value: unknown): string | undefined {

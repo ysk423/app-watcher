@@ -1,4 +1,4 @@
-import type { PlayReview, ReviewRow } from '../types';
+import type { Country, PlayReview, ReviewRow } from '../types';
 import { isoDaysAgo, isoNow } from '../util/time';
 
 /**
@@ -9,6 +9,7 @@ import { isoDaysAgo, isoNow } from '../util/time';
 export async function saveReviews(
   db: D1Database,
   packageName: string,
+  country: Country,
   reviews: PlayReview[],
   retentionDays: number
 ): Promise<number> {
@@ -24,12 +25,13 @@ export async function saveReviews(
     db
       .prepare(
         `INSERT OR IGNORE INTO reviews
-           (review_id, package_name, author, score, text, thumbs_up, app_version, review_date, reply_text, reply_date, fetched_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           (review_id, package_name, country, author, score, text, thumbs_up, app_version, review_date, reply_text, reply_date, fetched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         r.reviewId,
         packageName,
+        country,
         r.author,
         r.score,
         r.text,
@@ -49,11 +51,14 @@ export async function saveReviews(
 export async function listReviews(
   db: D1Database,
   packageName: string,
+  country: Country,
   limit: number
 ): Promise<ReviewRow[]> {
   const { results } = await db
-    .prepare('SELECT * FROM reviews WHERE package_name = ? ORDER BY review_date DESC LIMIT ?')
-    .bind(packageName, limit)
+    .prepare(
+      'SELECT * FROM reviews WHERE package_name = ? AND country = ? ORDER BY review_date DESC LIMIT ?'
+    )
+    .bind(packageName, country, limit)
     .all<ReviewRow>();
   return results ?? [];
 }
@@ -62,6 +67,7 @@ export async function listReviews(
 export async function listRecentReviewsForAi(
   db: D1Database,
   packageName: string,
+  country: Country,
   sinceIso: string,
   limit: number
 ): Promise<{ score: number | null; text: string | null; review_date: string; app_version: string | null }[]> {
@@ -69,10 +75,10 @@ export async function listRecentReviewsForAi(
     .prepare(
       `SELECT score, substr(COALESCE(text, ''), 1, 300) AS text, review_date, app_version
        FROM reviews
-       WHERE package_name = ? AND review_date >= ? AND text IS NOT NULL AND text <> ''
+       WHERE package_name = ? AND country = ? AND review_date >= ? AND text IS NOT NULL AND text <> ''
        ORDER BY review_date DESC LIMIT ?`
     )
-    .bind(packageName, sinceIso, limit)
+    .bind(packageName, country, sinceIso, limit)
     .all<{ score: number | null; text: string | null; review_date: string; app_version: string | null }>();
   return results ?? [];
 }
@@ -80,22 +86,33 @@ export async function listRecentReviewsForAi(
 export async function reviewSummary(
   db: D1Database,
   packageName: string,
+  country: Country,
   sinceIso: string
 ): Promise<{ count: number; avgScore: number | null }> {
   const row = await db
     .prepare(
-      'SELECT COUNT(*) AS count, AVG(score) AS avg_score FROM reviews WHERE package_name = ? AND review_date >= ?'
+      `SELECT COUNT(*) AS count, AVG(score) AS avg_score FROM reviews
+       WHERE package_name = ? AND country = ? AND review_date >= ?`
     )
-    .bind(packageName, sinceIso)
+    .bind(packageName, country, sinceIso)
     .first<{ count: number; avg_score: number | null }>();
   return { count: row?.count ?? 0, avgScore: row?.avg_score ?? null };
 }
 
-export async function countReviews(db: D1Database, packageName: string): Promise<number> {
-  const row = await db
-    .prepare('SELECT COUNT(*) AS count FROM reviews WHERE package_name = ?')
-    .bind(packageName)
-    .first<{ count: number }>();
+export async function countReviews(
+  db: D1Database,
+  packageName: string,
+  country?: Country
+): Promise<number> {
+  const row = country
+    ? await db
+        .prepare('SELECT COUNT(*) AS count FROM reviews WHERE package_name = ? AND country = ?')
+        .bind(packageName, country)
+        .first<{ count: number }>()
+    : await db
+        .prepare('SELECT COUNT(*) AS count FROM reviews WHERE package_name = ?')
+        .bind(packageName)
+        .first<{ count: number }>();
   return row?.count ?? 0;
 }
 

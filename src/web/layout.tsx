@@ -99,6 +99,19 @@ form.inline { display: inline; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 .notice { border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--panel); border-radius: 0 6px 6px 0; margin-bottom: 16px; }
 .notice.error { border-left-color: var(--danger); }
+
+/* 国の切り替えタブ。評価が国別なので、タブ自体に各国の評価を出して比較できるようにする */
+.country-tabs .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.country-tabs .tab {
+  display: flex; flex-direction: column; gap: 2px; min-width: 96px;
+  padding: 8px 14px; border: 1px solid var(--border); border-radius: 8px;
+  text-decoration: none; color: inherit; background: var(--bg);
+}
+.country-tabs .tab:hover { border-color: var(--accent); }
+.country-tabs .tab.current { border-color: var(--accent); background: var(--panel); box-shadow: inset 0 0 0 1px var(--accent); }
+.country-tabs .tab-label { font-size: 12px; color: var(--muted); }
+.country-tabs .tab-score { font-size: 20px; font-weight: 600; }
+.country-tabs .tab-note { font-size: 11px; color: var(--danger); }
 .diff { font-variant-numeric: tabular-nums; }
 .diff .from { color: var(--muted); }
 .diff .to { font-weight: 600; }

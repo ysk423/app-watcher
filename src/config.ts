@@ -1,5 +1,5 @@
 import { getSetting } from './db/system';
-import type { Env } from './types';
+import type { Country, CountryConfig, Env } from './types';
 import { parseHhMm } from './util/time';
 
 /**
@@ -22,6 +22,33 @@ export interface AppConfig {
   d1StorageLimitBytes: number;
 }
 
+/**
+ * 収集対象の国。
+ *
+ * 実装ポイント: Google Play は評価・レビュー・コンテンツレーティング・通貨を国別に返す
+ * (YouTube 実測で 日本 3.24 / 米国 3.84)。1 アプリにつき全対象国をまとめて収集する。
+ *
+ * 国を増やすと 1 アプリあたりのサブリクエストが 2 ずつ増える。
+ * 無料プランの上限は 50/実行なので、COLLECT_BATCH_SIZE との兼ね合いで 3 か国程度が限界。
+ */
+export const COUNTRIES: readonly CountryConfig[] = [
+  { country: 'JP', hl: 'ja', gl: 'JP', label: '日本' },
+  { country: 'US', hl: 'en', gl: 'US', label: '米国' },
+] as const;
+
+/** 一覧など単一の値しか出せない場面で代表として使う国 */
+export const PRIMARY_COUNTRY: Country = 'JP';
+
+export function countryConfig(country: Country): CountryConfig {
+  const found = COUNTRIES.find((c) => c.country === country);
+  if (!found) throw new Error(`未対応の国コードです: ${country}`);
+  return found;
+}
+
+export function countryLabel(country: Country): string {
+  return COUNTRIES.find((c) => c.country === country)?.label ?? country;
+}
+
 /** キューの再試行上限。これを超えたタスクはその日は failed のままにする */
 export const MAX_QUEUE_ATTEMPTS = 3;
 
@@ -33,7 +60,8 @@ export const KEEP_ANALYSES_PER_APP = 30;
 
 const DEFAULTS = {
   geminiModel: 'gemini-3.5-flash-lite',
-  maxApps: 100,
+  // D1 無料枠(1DB あたり 500MB)から逆算した安全側の値。詳細は Docs/design.md の容量見積もり
+  maxApps: 50,
   collectStartMinutes: 3 * 60,
   collectBatchSize: 2,
   analyzeBatchSize: 2,
